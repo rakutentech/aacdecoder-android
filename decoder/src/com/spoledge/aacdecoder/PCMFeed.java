@@ -235,7 +235,7 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
         }
         else {
             stopped = true;
-            if (isPlaying) audioTrack.pause();
+            if (isPlaying) pauseTrack(audioTrack);
         }
 
         notify();
@@ -294,10 +294,14 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
         Log.d( LOG, "onMarkerReached()" );
 
         if (markerReachedAction == MARKER_REACHED_ACTION_PAUSE) {
-            track.pause();
+            pauseTrack(track);
         }
     }
 
+    private void pauseTrack(AudioTrack track) {
+        if (track.getState() == AudioTrack.STATE_UNINITIALIZED) return;
+        track.pause();
+    }
 
     /**
      * Called on the listener to periodically notify it that the playback head
@@ -350,6 +354,9 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
                                 bufferSizeInBytes,
                                 AudioTrack.MODE_STREAM );
 
+            if (atrack.getState() == AudioTrack.STATE_UNINITIALIZED) {
+                throw new IllegalStateException("Track not initialized, we can't use it.");
+            }
             atrack.setPlaybackPositionUpdateListener( this );
             atrack.setPositionNotificationPeriod( msToSamples( 200, sampleRate, channels ));
 
@@ -394,6 +401,7 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
 
                 // Log.d( LOG, "PCM fed by " + ln + " and written " + written + " samples - buffered " + buffered);
 
+                synchronized (this) {
                 if (!stopped && !isPlaying) {
                     if (buffered*2 >= bufferSizeInBytes) {
                         Log.d( LOG, "start of AudioTrack - buffered " + buffered + " samples");
@@ -403,6 +411,7 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
                     else {
                         Log.d( LOG, "start buffer not filled enough - AudioTrack not started yet");
                     }
+                }
                 }
 
                 writtenNow += written;
@@ -416,11 +425,13 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
         if (!stopped && stoppedByEOF) waitForLastTone();
 
         // Stop playing:
-        if (isPlaying) atrack.pause();
+        if (isPlaying) pauseTrack(atrack);
         atrack.flush();
         atrack.release();
 
+        synchronized (this) {
         stopped = true;
+        }
 
         Log.d( LOG, "run() stopped." );
     }

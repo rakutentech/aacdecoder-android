@@ -19,6 +19,7 @@
 */
 package com.spoledge.aacdecoder;
 
+import android.text.TextUtils;
 import android.util.Log;
 
 import java.io.FileInputStream;
@@ -28,6 +29,7 @@ import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 /**
@@ -42,6 +44,7 @@ import java.net.URLConnection;
  * </pre>
  */
 public class AACPlayer {
+    private static AtomicInteger instanceCounter = new AtomicInteger();
 
     /**
      * The default expected bitrate.
@@ -65,13 +68,14 @@ public class AACPlayer {
 
 
     private static final String LOG = "AACPlayer";
+    private final int instance = instanceCounter.incrementAndGet();
 
 
     ////////////////////////////////////////////////////////////////////////////
     // Attributes
     ////////////////////////////////////////////////////////////////////////////
 
-    protected boolean stopped;
+    protected boolean stopped = true;
     protected boolean metadataEnabled = true;
     protected boolean responseCodeCheckEnabled = true;
 
@@ -290,9 +294,15 @@ public class AACPlayer {
      * @param expectedKBitSecRate the expected average bitrate in kbit/sec; -1 means unknown
      */
     public void playAsync( final String url, final int expectedKBitSecRate ) {
+        synchronized (this) {
+            stopped = false;
+        }
         new Thread(new Runnable() {
             public void run() {
                 try {
+                    synchronized (AACPlayer.this) {
+                        if (stopped) return;
+                    }
                     play( url, expectedKBitSecRate );
                 }
                 catch (Exception e) {
@@ -301,7 +311,7 @@ public class AACPlayer {
                     if (playerCallback != null) playerCallback.playerException( e );
                 }
             }
-        }).start();
+        }, threadName("playAsync")).start();
     }
 
 
@@ -310,7 +320,7 @@ public class AACPlayer {
      * @param url the URL of the stream or file
      */
     public void play( String url ) throws Exception {
-        play( url, -1 );
+        play(url, -1);
     }
 
 
@@ -335,6 +345,9 @@ public class AACPlayer {
 
                 // try to get the expectedKBitSecRate from headers
                 // but if then expectedKBitSecRate is passed, then ignore the declared one:
+                synchronized (AACPlayer.this) {
+                    if (stopped) return;
+                }
                 play( is, expectedKBitSecRate != -1 ? expectedKBitSecRate : declaredBitRate );
             }
             finally {
@@ -358,7 +371,6 @@ public class AACPlayer {
         }
     }
 
-
     /**
      * Plays a stream synchronously.
      * @param is the input stream
@@ -374,7 +386,9 @@ public class AACPlayer {
      * @param expectedKBitSecRate the expected average bitrate in kbit/sec; -1 means unknown
      */
     public final void play( InputStream is, int expectedKBitSecRate ) throws Exception {
-        stopped = false;
+        synchronized (this) {
+            stopped = false;
+        }
 
         if (playerCallback != null) playerCallback.playerStarted();
 
@@ -390,7 +404,7 @@ public class AACPlayer {
     /**
      * Stops the execution thread.
      */
-    public void stop() {
+    public synchronized void stop() {
         stopped = true;
     }
 
@@ -409,7 +423,7 @@ public class AACPlayer {
         BufferReader reader = new BufferReader(
                                         computeInputBufferSize( expectedKBitSecRate, decodeBufferCapacityMs ),
                                         is );
-        new Thread( reader ).start();
+        new Thread( reader, threadName("BufferReader")).start();
 
         PCMFeed pcmfeed = null;
         Thread pcmfeedThread = null;
@@ -440,7 +454,7 @@ public class AACPlayer {
             int decodeBufferIndex = 0;
 
             pcmfeed = createPCMFeed( info );
-            pcmfeedThread = new Thread( pcmfeed );
+            pcmfeedThread = new Thread( pcmfeed, threadName("PCMFeed"));
             pcmfeedThread.start();
 
             if (info.getFirstSamples() != null) {
@@ -461,9 +475,9 @@ public class AACPlayer {
                 profSamples += nsamp;
                 profCount++;
 
-                Log.d( LOG, "play(): decoded " + nsamp + " samples" );
-
-                if (nsamp == 0 || stopped) break;
+                synchronized(this) {
+                    if (nsamp == 0 || stopped) break;
+                }
                 if (!pcmfeed.feed( decodeBuffer, nsamp ) || stopped) break;
 
                 int kBitSecRate = computeAvgKBitSecRate( info );
@@ -478,7 +492,10 @@ public class AACPlayer {
         }
         finally {
             boolean stopImmediatelly = stopped;
-            stopped = true;
+
+            synchronized(this) {
+                stopped = true;
+            }
 
             if (pcmfeed != null) pcmfeed.stop( !stopImmediatelly );
             decoder.stop();
@@ -501,6 +518,10 @@ public class AACPlayer {
 
             if (playerCallback != null) playerCallback.playerStopped( perf );
         }
+    }
+
+    private String threadName(String tag) {
+        return "AACPlayer (" + instance + ") - " + tag;
     }
 
 
@@ -780,4 +801,8 @@ public class AACPlayer {
         return (int)(((long) bytesconsumed) * channels * sampleRate * durationMs  / (1000L * samples));
     }
 
+    @Override
+    public String toString() {
+        return getClass().getSimpleName() + " #" + instance + " stopped: " + stopped;
+    }
 }
