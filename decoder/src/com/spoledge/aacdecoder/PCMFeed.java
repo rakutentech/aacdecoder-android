@@ -393,6 +393,9 @@ public class PCMFeed implements Runnable, AudioTrack.OnPlaybackPositionUpdateLis
                 if (written < 0) {
                     Log.e( LOG, "error in playback feed: " + written );
                     stopped = true;
+                    if (playerCallback != null) {
+                        playerCallback.playerException(new Throwable("error in playback feed:" + written));
+                    }
                     break;
                 }
 
